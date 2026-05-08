@@ -1,0 +1,13 @@
+{
+  "name": "stonemtn-repair-portal",
+  "version": "2.0.0",
+  "description": "Stone MTN Device Repair — Management Portal",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "express-session": "^1.18.0"
+  }
+}
