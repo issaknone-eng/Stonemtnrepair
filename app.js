@@ -2,9 +2,15 @@
 let currentUser = null; // { id, username, name, role, active }
 
 // User accounts — persisted in the store table under key 'users'
+// Real accounts (and password hashes) live server-side in data.json — this is
+// only a placeholder shown before the first /api/data load completes.
 let users = [
-  { id: 'u1', username: 'admin', password: 'admin1234', name: 'Admin', role: 'Admin', active: true },
+  { id: 'u1', username: 'admin', name: 'Admin', role: 'Admin', active: true },
 ];
+
+// Escapes user-supplied text before it's interpolated into innerHTML.
+const _escMap = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' };
+function esc(s) { return (s == null ? '' : String(s)).replace(/[&<>"']/g, c => _escMap[c]); }
 
 function isAdmin()          { return currentUser?.role === 'Admin'; }
 function isManager()        { return currentUser?.role === 'Manager'; }
@@ -1145,6 +1151,10 @@ async function _activateSession(user) {
   renderStats();
   renderWOTable();
   updateLowStockBadge();
+  if (user.forcePasswordChange) {
+    notify('Please set a new admin password before continuing.');
+    openChangeAdminPasswordModal();
+  }
 }
 
 async function doLogin() {
@@ -1205,10 +1215,10 @@ function applyRoleUI() {
   renderClockBtn();
 }
 
-// Admin PIN prompt — calls cb() only if PIN matches storeSettings.adminPin
+// Admin PIN prompt — verified server-side via /api/auth/verify-pin.
+// (storeSettings.adminPin from the API is a masked placeholder, never the real value.)
 function requireAdminPIN(cb, actionLabel) {
-  const pin = (storeSettings.adminPin || '').toString().trim();
-  if (!pin) { cb(); return; } // no PIN configured — allow through
+  if (!storeSettings.adminPin) { cb(); return; } // no PIN configured — allow through
   openModal('Admin PIN Required', `
     <div style="text-align:center;padding:8px 0 16px;">
       <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:16px;">${actionLabel || 'Enter admin PIN to continue'}</div>
@@ -1227,10 +1237,20 @@ function requireAdminPIN(cb, actionLabel) {
   setTimeout(() => { const el = document.getElementById('admin-pin-input'); if(el) el.focus(); }, 50);
 }
 
-function confirmAdminPIN() {
+async function confirmAdminPIN() {
   const entered = (document.getElementById('admin-pin-input')?.value || '').trim();
-  const pin     = (storeSettings.adminPin || '').toString().trim();
-  if (entered !== pin) {
+  let ok = false;
+  try {
+    const res = await fetch('/api/auth/verify-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: entered }),
+    });
+    const data = await res.json().catch(() => ({}));
+    ok = !!data.ok;
+  } catch (e) { ok = false; }
+
+  if (!ok) {
     document.getElementById('admin-pin-error').textContent = 'Incorrect PIN.';
     document.getElementById('admin-pin-input').value = '';
     document.getElementById('admin-pin-input').focus();
@@ -1607,12 +1627,12 @@ function renderWOTable() {
       ? `<span style="color:var(--accent);font-family:\'IBM Plex Mono\',monospace;">${w.parts.length} · $${partsTotal.toFixed(2)}</span>`
       : `<span style="color:var(--text-dim);">—</span>`;
     return `
-    <tr onclick="showWODetail('${w.id}')">
-      <td class="td-mono">${w.id}</td>
-      <td class="td-primary">${custName(w.customerId)}</td>
-      <td>${w.device}</td>
+    <tr onclick="showWODetail('${esc(w.id)}')">
+      <td class="td-mono">${esc(w.id)}</td>
+      <td class="td-primary">${esc(custName(w.customerId))}</td>
+      <td>${esc(w.device)}</td>
       <td>${statusBadge(w.status)}</td>
-      <td class="td-mono" style="color:var(--text-muted)">${w.tech}</td>
+      <td class="td-mono" style="color:var(--text-muted)">${esc(w.tech)}</td>
       <td style="font-size:12px;">${partsInfo}</td>
       <td class="td-mono">${formatDate(w.created)}</td>
     </tr>`;
@@ -2620,15 +2640,15 @@ function renderCustomerTable() {
   tbody.innerHTML = rows.map(c => {
     const wos = woForCust(c.id);
     const spent = wos.filter(w=>w.status==='Completed').reduce((s,w)=>s+w.estimate,0);
-    const tagsHtml = (c.tags||[]).slice(0,2).map(t=>`<span style="background:var(--surface2);border:1px solid var(--border);font-family:\'IBM Plex Mono\',monospace;font-size:9px;padding:1px 6px;color:var(--text-muted);">${t}</span>`).join(' ');
+    const tagsHtml = (c.tags||[]).slice(0,2).map(t=>`<span style="background:var(--surface2);border:1px solid var(--border);font-family:\'IBM Plex Mono\',monospace;font-size:9px;padding:1px 6px;color:var(--text-muted);">${esc(t)}</span>`).join(' ');
     return `
-    <tr onclick="showCustDetail('${c.id}')">
-      <td class="td-primary">${c.first} ${c.last}</td>
-      <td class="td-mono">${c.phone}</td>
-      <td style="color:var(--text-muted);font-size:12px;">${c.email || '—'}</td>
+    <tr onclick="showCustDetail('${esc(c.id)}')">
+      <td class="td-primary">${esc(c.first)} ${esc(c.last)}</td>
+      <td class="td-mono">${esc(c.phone)}</td>
+      <td style="color:var(--text-muted);font-size:12px;">${esc(c.email) || '—'}</td>
       <td class="td-mono">${wos.length}</td>
       <td class="td-mono" style="color:var(--accent);">$${spent.toFixed(0)}</td>
-      <td style="font-size:11px;color:var(--text-muted);">${c.source||'—'}</td>
+      <td style="font-size:11px;color:var(--text-muted);">${esc(c.source)||'—'}</td>
       <td>${tagsHtml || '<span style="color:var(--text-dim);">—</span>'}</td>
     </tr>`;
   }).join('');
@@ -2646,14 +2666,14 @@ function renderCustDetail() {
   const tagColors = { VIP:'var(--accent)', Repeat:'var(--cyan)', Business:'var(--purple)', Newsletter:'var(--blue)', Inactive:'var(--text-dim)' };
 
   const tagsHtml = (c.tags||[]).length
-    ? (c.tags).map(t => `<span style="background:var(--surface2);border:1px solid var(--border);font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;color:${tagColors[t]||'var(--text-muted)'};">${t}</span>`).join(' ')
+    ? (c.tags).map(t => `<span style="background:var(--surface2);border:1px solid var(--border);font-family:\'IBM Plex Mono\',monospace;font-size:10px;padding:2px 8px;color:${tagColors[t]||'var(--text-muted)'};">${esc(t)}</span>`).join(' ')
     : '<span style="color:var(--text-dim);font-size:12px;">No tags</span>';
 
   const woRows = wos.length
     ? wos.map(w => `
-        <div class="wo-history-row" onclick="showWODetail('${w.id}')">
-          <span class="td-mono" style="color:var(--text-muted);flex-shrink:0;">${w.id}</span>
-          <span style="flex:1;">${w.device}</span>
+        <div class="wo-history-row" onclick="showWODetail('${esc(w.id)}')">
+          <span class="td-mono" style="color:var(--text-muted);flex-shrink:0;">${esc(w.id)}</span>
+          <span style="flex:1;">${esc(w.device)}</span>
           ${statusBadge(w.status)}
           <span class="td-mono" style="color:var(--accent);flex-shrink:0;">$${w.estimate.toFixed(2)}</span>
           <span class="td-mono" style="color:var(--text-dim);flex-shrink:0;">${formatDate(w.created)}</span>
@@ -2663,14 +2683,14 @@ function renderCustDetail() {
   document.getElementById('cust-detail-content').innerHTML = `
     <div class="page-header">
       <div>
-        <div class="page-title">${c.first} ${c.last}
+        <div class="page-title">${esc(c.first)} ${esc(c.last)}
           ${(c.tags||[]).includes('VIP') ? '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;background:var(--accent);color:#000;padding:2px 8px;margin-left:10px;vertical-align:middle;font-weight:700;">VIP</span>' : ''}
         </div>
         <div class="page-subtitle">Customer since ${formatDate(c.createdAt)} · ${wos.length} repair${wos.length!==1?'s':''} · $${totalSpent.toFixed(2)} total spent</div>
       </div>
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-ghost" onclick="openEditCustModal('${c.id}')">Edit Profile</button>
-        <button class="btn btn-accent" onclick="showPage('checkin', document.querySelector('.nav-btn:nth-child(3)'));checkinData.customer='${c.id}';checkinStep=2;renderCheckin();">+ New Check-In</button>
+        <button class="btn btn-ghost" onclick="openEditCustModal('${esc(c.id)}')">Edit Profile</button>
+        <button class="btn btn-accent" onclick="showPage('checkin', document.querySelector('.nav-btn:nth-child(3)'));checkinData.customer='${esc(c.id)}';checkinStep=2;renderCheckin();">+ New Check-In</button>
       </div>
     </div>
 
@@ -2702,18 +2722,18 @@ function renderCustDetail() {
         <!-- Contact Info -->
         <div class="card">
           <div class="card-label">Contact</div>
-          <div class="info-row"><span class="info-key">Phone</span><span class="info-val mono">${c.phone||'—'}</span></div>
-          ${c.phone2 ? `<div class="info-row"><span class="info-key">Phone 2</span><span class="info-val mono">${c.phone2}</span></div>` : ''}
-          <div class="info-row"><span class="info-key">Email</span><span class="info-val" style="word-break:break-all;">${c.email||'—'}</span></div>
-          <div class="info-row" style="${!c.address?'':''}"><span class="info-key">Address</span><span class="info-val" style="text-align:right;font-size:12px;">${c.address||'—'}</span></div>
+          <div class="info-row"><span class="info-key">Phone</span><span class="info-val mono">${esc(c.phone)||'—'}</span></div>
+          ${c.phone2 ? `<div class="info-row"><span class="info-key">Phone 2</span><span class="info-val mono">${esc(c.phone2)}</span></div>` : ''}
+          <div class="info-row"><span class="info-key">Email</span><span class="info-val" style="word-break:break-all;">${esc(c.email)||'—'}</span></div>
+          <div class="info-row" style="${!c.address?'':''}"><span class="info-key">Address</span><span class="info-val" style="text-align:right;font-size:12px;">${esc(c.address)||'—'}</span></div>
           <div class="info-row"><span class="info-key">Birthday</span><span class="info-val">${c.birthday ? formatDate(c.birthday) : '—'}</span></div>
         </div>
 
         <!-- Marketing Info -->
         <div class="card">
           <div class="card-label">Marketing</div>
-          <div class="info-row"><span class="info-key">Source</span><span class="info-val">${c.source||'—'}</span></div>
-          <div class="info-row"><span class="info-key">Pref. Contact</span><span class="info-val">${c.preferredContact||'—'}</span></div>
+          <div class="info-row"><span class="info-key">Source</span><span class="info-val">${esc(c.source)||'—'}</span></div>
+          <div class="info-row"><span class="info-key">Pref. Contact</span><span class="info-val">${esc(c.preferredContact)||'—'}</span></div>
           <div class="info-row">
             <span class="info-key">SMS Opt-in</span>
             <span class="info-val" style="color:${c.optInSMS?'var(--green)':'var(--red)'};">${c.optInSMS ? '✓ Yes' : '✗ No'}</span>
@@ -2731,15 +2751,15 @@ function renderCustDetail() {
         <!-- Notes -->
         <div class="card">
           <div class="card-label">Notes</div>
-          <div style="font-size:13px;color:${c.notes?'var(--text)':'var(--text-dim)'};line-height:1.6;min-height:40px;">${c.notes||'No notes on file.'}</div>
-          <button onclick="openEditCustModal('${c.id}')" class="btn btn-ghost btn-sm" style="margin-top:10px;width:100%;">Edit Notes</button>
+          <div style="font-size:13px;color:${c.notes?'var(--text)':'var(--text-dim)'};line-height:1.6;min-height:40px;">${esc(c.notes)||'No notes on file.'}</div>
+          <button onclick="openEditCustModal('${esc(c.id)}')" class="btn btn-ghost btn-sm" style="margin-top:10px;width:100%;">Edit Notes</button>
         </div>
 
         <!-- Devices owned -->
         ${deviceSet.length ? `
         <div class="card">
           <div class="card-label">Devices on File</div>
-          ${deviceSet.map(d => `<div style="font-size:13px;padding:5px 0;border-bottom:1px solid var(--border);color:var(--text-muted);">${d}</div>`).join('')}
+          ${deviceSet.map(d => `<div style="font-size:13px;padding:5px 0;border-bottom:1px solid var(--border);color:var(--text-muted);">${esc(d)}</div>`).join('')}
         </div>` : ''}
       </div>
 
@@ -5172,17 +5192,24 @@ function openChangeAdminPasswordModal() {
   `;
 }
 
-function saveAdminPassword() {
-  const admin   = users.find(u => u.role === 'Admin');
-  if (!admin) return;
+async function saveAdminPassword() {
   const current = document.getElementById('cap-current').value;
   const next    = document.getElementById('cap-new').value;
   const confirm = document.getElementById('cap-confirm').value;
-  if (current !== admin.password) { alert('Current password is incorrect.'); return; }
-  if (!next)                       { alert('New password cannot be empty.'); return; }
-  if (next !== confirm)            { alert('Passwords do not match.'); return; }
-  admin.password = next;
-  saveData();
+  if (!next)             { alert('New password cannot be empty.'); return; }
+  if (next !== confirm)  { alert('Passwords do not match.'); return; }
+  try {
+    const res = await fetch('/api/auth/password', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword: current, newPassword: next }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || 'Could not change password.');
+      return;
+    }
+  } catch (e) { alert('Connection error — please try again.'); return; }
   closeModalDirect();
   notify('Admin password changed ✓');
 }
